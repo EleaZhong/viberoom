@@ -11,11 +11,11 @@ function setup() {
   frameRate(10); // Limit the frame rate to prevent excessive querying
 
   // Create multiple ellipses
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 25; i++) {
     ellipses.push({
       locx: random(windowWidth),
       locy: random(windowHeight),
-      size: random(10, 100)
+      size: random(4, 100)
     });
   }
 }
@@ -37,11 +37,11 @@ function draw() {
 
   // Map the sentiment score and magnitude to color and size
   let color = map(sentimentScore, -1, 1, 0, 255);
-  let movementrange = map(sentimentMagnitude, 0, 10, 0, 40);
+  let movementrange = map(sentimentMagnitude, 0, 10, 0, 65);
 
   // if any is NaN, set to 0
   if (isNaN(color)) {
-    color = 0;
+    color = 125;
   }
   if (isNaN(movementrange)) {
     movementrange = 10;
