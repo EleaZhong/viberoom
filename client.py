@@ -78,27 +78,6 @@ def record_audio(filename):
     wf.close()
 
 
-def continuous_recording(queue):
-    recording_number = 0  # Make sure this starts as an integer
-    last_filename = None
-
-    if os.path.exists("recordings"):
-        shutil.rmtree("recordings")
-    os.makedirs("recordings")
-    
-    while True:
-        # Convert recording_number to int to make sure the formatting works
-        recording_number = int(recording_number)
-        
-        filename = f"recordings/recording-{recording_number:04d}.wav"
-        record_audio(filename)
-        recording_logger.info("Filename: " + str(filename))
-        
-        transcript = transcribe_audio(filename)
-        queue.put(transcript)
-        
-        recording_number += 1
-
 
 def transcribe_audio(filename):
     client = OpenAI()
@@ -145,6 +124,7 @@ def send_data_to_server(sentiment_data):
         'sentiment_score': sentiment_score,
         'sentiment_magnitude': sentiment_magnitude
     }
+    print(data)
     response = requests.post('http://localhost:8000/api/v1/sentiment', json=data)
 
     if response.status_code == 200:
@@ -153,51 +133,33 @@ def send_data_to_server(sentiment_data):
         print('Failed to send sentiment analysis data to server.', response.status_code)
 
 
-def start_sending(analysis_queue):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        while True:
-            sentiment_data = analysis_queue.get()
-            if sentiment_data is None:
-                break  # Stop the loop if a 'None' is received
-            executor.submit(send_data_to_server, sentiment_data)
 
-
-def process_audio(transcript, analysis_queue):
-    processing_logger.info(f"Transcript: {transcript}")
-    document_score, document_magnitude, sentiments, magnitudes = analyze_sentiment(transcript)
-
-    analysis_queue.put((document_score, document_magnitude))
-    processing_logger.info("Document Score: " + str(document_score))
-    processing_logger.info("Document Magnitude: " + str(document_magnitude))
-    processing_logger.info("Sentiments: " + str(sentiments))
-    processing_logger.info("Magnitudes: " + str(magnitudes))
-
-
-def start_processing(queue, analysis_queue):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        while True:
-            transcript = queue.get()
-            if transcript is None:
-                break  # Stop the loop if a 'None' is received
-            executor.submit(process_audio, transcript, analysis_queue)
-
+def transcribe_and_analyze_and_send(filename):
+    transcription = transcribe_audio(filename)
+    document_score, document_magnitude, sentiments, magnitudes = analyze_sentiment(transcription)
+    send_data_to_server((document_score, document_magnitude))
 
 def main():
+    recording_number = 0  # Make sure this starts as an integer
+    last_filename = None
 
-    recording_queue = Queue()
-    analysis_queue = Queue()
+    if os.path.exists("recordings"):
+        shutil.rmtree("recordings")
+    os.makedirs("recordings")
+    
+    while True:
+        # Convert recording_number to int to make sure the formatting works
+        recording_number = int(recording_number)
+        
+        filename = f"recordings/recording-{recording_number:04d}.wav"
+        record_audio(filename)
+        recording_logger.info("Filename: " + str(filename))
+        
 
-    recording_thread = threading.Thread(
-        target=continuous_recording, args=(recording_queue,))
-    recording_thread.start()
-
-    processing_thread = threading.Thread(
-        target=start_processing, args=(recording_queue, analysis_queue))
-    processing_thread.start()
-
-    sending_thread = threading.Thread(
-        target=start_sending, args=(analysis_queue,))
-    sending_thread.start()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            executor.submit(transcribe_and_analyze_and_send, filename)
+        
+        recording_number += 1
 
 if __name__ == '__main__':
     set_up()
