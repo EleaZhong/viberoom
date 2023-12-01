@@ -30,6 +30,7 @@ sentiments = [Sentiment(sentiment_score=0.0, sentiment_magnitude=0.0)]
 @app.post("/api/v1/sentiment")
 async def create_sentiment(sentiment: Sentiment):
     sentiments.append(sentiment)
+    print(f"recieved {sentiment}")
     return sentiment
 
 @app.get("/api/v1/sentiment", response_model=Sentiment)
