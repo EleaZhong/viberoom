@@ -11,7 +11,10 @@ from queue import Queue
 import logging
 from dotenv import load_dotenv
 import threading
+from openai import OpenAI
 import openai
+import concurrent.futures
+import shutil
 
 
 load_dotenv()
@@ -49,7 +52,7 @@ def record_audio(filename):
     FORMAT = pyaudio.paInt16
     CHANNELS = 1
     RATE = 16000
-    RECORD_SECONDS = 3
+    RECORD_SECONDS = 2
 
     p = pyaudio.PyAudio()
     stream = p.open(format=FORMAT,
@@ -78,6 +81,10 @@ def record_audio(filename):
 def continuous_recording(queue):
     recording_number = 0  # Make sure this starts as an integer
     last_filename = None
+
+    if os.path.exists("recordings"):
+        shutil.rmtree("recordings")
+    os.makedirs("recordings")
     
     while True:
         # Convert recording_number to int to make sure the formatting works
@@ -87,127 +94,110 @@ def continuous_recording(queue):
         record_audio(filename)
         recording_logger.info("Filename: " + str(filename))
         
-        if last_filename:
-            combined_filename = f"recordings/combined-{recording_number:04d}.wav"
-            
-            with wave.open(combined_filename, 'wb') as outfile:
-                # Open first file to read its headers
-                with wave.open(last_filename, 'rb') as infile:
-                    params = infile.getparams()
-                    outfile.setparams(params)
-                
-                # Now proceed to read frames from each file and write
-                for fname in [last_filename, filename]:
-                    with wave.open(fname, 'rb') as infile:
-                        outfile.writeframes(infile.readframes(infile.getnframes()))
-            
-            queue.put(combined_filename)
-            recording_logger.info("Combined Filename: " + str(combined_filename))
-        else:
-            queue.put(filename)
+        transcript = transcribe_audio(filename)
+        queue.put(transcript)
         
-        last_filename = filename
         recording_number += 1
 
 
 def transcribe_audio(filename):
+    client = OpenAI()
     with open(filename, "rb") as f:
-        transcript = openai.Audio.transcribe("whisper-1", f)
-    return transcript["text"]
+        transcript = client.audio.transcriptions.create(model="whisper-1", file=f, language="en")
+        print(transcript)
+    return transcript.text
 
 
-def analyze_sentiment(text_content: str = "I am so happy and joyful.") -> [float, float]:
-    """
-    Analyzes Sentiment in a string.
-
-    Args:
-      text_content: The text content to analyze.
-    """
+def analyze_sentiment(text_content: str = "I am so happy and joyful.") -> [float, float, list, list]:
 
     client = language_v2.LanguageServiceClient()
 
-    # text_content = 'I am so happy and joyful.'
+    # Define the type of document
+    document_type = language_v2.Document.Type.PLAIN_TEXT
 
-    # Available types: PLAIN_TEXT, HTML
-    document_type_in_plain_text = language_v2.Document.Type.PLAIN_TEXT
-
-    # Optional. If not specified, the language is automatically detected.
-    # For list of supported languages:
-    # https://cloud.google.com/natural-language/docs/languages
-    language_code = "en"
+    # Set up the document with the content and type
     document = {
         "content": text_content,
-        "type_": document_type_in_plain_text,
-        "language_code": language_code,
+        "type_": document_type,
+        "language_code": "en",  # Language code (optional, auto-detects if not provided)
     }
 
-    # Available values: NONE, UTF8, UTF16, UTF32
-    # See https://cloud.google.com/natural-language/docs/reference/rest/v2/EncodingType.
     encoding_type = language_v2.EncodingType.UTF8
 
     response = client.analyze_sentiment(
         request={"document": document, "encoding_type": encoding_type}
     )
-    # Get overall sentiment of the input document
-    print(f"Document sentiment score: {response.document_sentiment.score}")
-    print(f"Document sentiment magnitude: {response.document_sentiment.magnitude}")
-    # Get sentiment for all sentences in the document
-    sentiments = []
-    magnitudes = []
-    for sentence in response.sentences:
-        print(f"Sentence text: {sentence.text.content}")
-        print(f"Sentence sentiment score: {sentence.sentiment.score}")
-        print(f"Sentence sentiment magnitude: {sentence.sentiment.magnitude}")
-        sentiments.append(sentence.sentiment.score)
-        magnitudes.append(sentence.sentiment.magnitude)
 
-    # Get the language of the text, which will be the same as
-    # the language specified in the request or, if not specified,
-    # the automatically-detected language.
-    print(f"Language of the text: {response.language_code}")
-    return response.document_sentiment.score, response.document_sentiment.magnitude, sentiments, magnitudes
+    # Extracting document sentiment
+    document_score = response.document_sentiment.score
+    document_magnitude = response.document_sentiment.magnitude
 
-def send_to_server(sentiment_score, sentiment_magnitude):
-    """
-    Send the sentiment analysis data to the server
-    """
+    # Extracting sentence level sentiments
+    sentiments = [sentence.sentiment.score for sentence in response.sentences]
+    magnitudes = [sentence.sentiment.magnitude for sentence in response.sentences]
+
+    return document_score, document_magnitude, sentiments, magnitudes
+
+
+def send_data_to_server(sentiment_data):
+    sentiment_score, sentiment_magnitude = sentiment_data
     data = {
         'sentiment_score': sentiment_score,
         'sentiment_magnitude': sentiment_magnitude
     }
     response = requests.post('http://localhost:8000/api/v1/sentiment', json=data)
 
-    return response.status_code
+    if response.status_code == 200:
+        print('Sentiment analysis data sent to server successfully.')
+    else:
+        print('Failed to send sentiment analysis data to server.', response.status_code)
 
-def process_audio(queue):
-    while True:
-        filename = queue.get()
-        transcript = transcribe_audio(filename)
-        document_score, document_magnitude, sentiments, magnitudes = analyze_sentiment(transcript)
-        processing_logger.info("Filename: " + str(filename))
-        processing_logger.info("Transcript: " + str(transcript))
-        processing_logger.info("Document Score: " + str(document_score))
-        processing_logger.info("Document Magnitude: " + str(document_magnitude))
-        processing_logger.info("Sentiments: " + str(sentiments))
-        processing_logger.info("Magnitudes: " + str(magnitudes))
-        status_code = send_to_server(document_score, document_magnitude)
-        if status_code == 200:
-            processing_logger.info('Sentiment analysis data sent to server successfully.')
-        else:
-            processing_logger.info('Failed to send sentiment analysis data to server.')
+
+def start_sending(analysis_queue):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        while True:
+            sentiment_data = analysis_queue.get()
+            if sentiment_data is None:
+                break  # Stop the loop if a 'None' is received
+            executor.submit(send_data_to_server, sentiment_data)
+
+
+def process_audio(transcript, analysis_queue):
+    processing_logger.info(f"Transcript: {transcript}")
+    document_score, document_magnitude, sentiments, magnitudes = analyze_sentiment(transcript)
+
+    analysis_queue.put((document_score, document_magnitude))
+    processing_logger.info("Document Score: " + str(document_score))
+    processing_logger.info("Document Magnitude: " + str(document_magnitude))
+    processing_logger.info("Sentiments: " + str(sentiments))
+    processing_logger.info("Magnitudes: " + str(magnitudes))
+
+
+def start_processing(queue, analysis_queue):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        while True:
+            transcript = queue.get()
+            if transcript is None:
+                break  # Stop the loop if a 'None' is received
+            executor.submit(process_audio, transcript, analysis_queue)
 
 
 def main():
 
     recording_queue = Queue()
+    analysis_queue = Queue()
 
     recording_thread = threading.Thread(
         target=continuous_recording, args=(recording_queue,))
     recording_thread.start()
 
     processing_thread = threading.Thread(
-        target=process_audio, args=(recording_queue,))
+        target=start_processing, args=(recording_queue, analysis_queue))
     processing_thread.start()
+
+    sending_thread = threading.Thread(
+        target=start_sending, args=(analysis_queue,))
+    sending_thread.start()
 
 if __name__ == '__main__':
     set_up()
