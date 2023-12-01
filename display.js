@@ -72,6 +72,7 @@ function draw() {
 let fireParticles = [];
 let sentimentScore = 0; //default score
 let sentimentMagnitude = 0; //default magnitude
+let bg;
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
@@ -82,6 +83,8 @@ function setup() {
   for (let i = 0; i < 150; i++) {
     fireParticles.push(createParticle());
   }
+
+  bg = loadImage('background.png');
 }
 
 function draw() {
@@ -89,7 +92,7 @@ function draw() {
   fetchSentimentData();
 
   //clear canvas
-  background(0);
+  background(bg);
 
   //update and draw each fire particle
   for (let particle of fireParticles) {
@@ -110,12 +113,13 @@ function fetchSentimentData() {
 
 function createParticle() {
   let direction = random(-1, 1);
-  let speed = random(0.01, 0.04);
+  let speed = random(0.01, 0.07);
+  let radius = random(20, 200)
   return {
-    x: width / 2,
-    y: height / 2,
+    x: width * 0.68,
+    y: height * 0.51,
     angle: random(0, TWO_PI),
-    radius: random(50, 200),
+    radius: radius,
     speed: direction * speed,
     color: color(random(200, 255), random(50), 0, 150),
   };
@@ -123,10 +127,10 @@ function createParticle() {
 
 function updateParticle(particle) {
   //adjust speed based on sentiment magnitude
-  particle.speed += sentimentMagnitude * 0.001;
+  speed = particle.speed + sentimentMagnitude * 0.001;
 
   //update angle
-  particle.angle += particle.speed;
+  particle.angle += speed;
 
   //adjust color based on sentiment score
   particle.color = lerpColor(color(255, 0, 0), color(0, 255, 0), (sentimentScore + 1) / 2);
